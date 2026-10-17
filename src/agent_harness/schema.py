@@ -1,5 +1,7 @@
 """Validated configuration and model-facing tool contracts."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -13,6 +15,7 @@ class Limits(StrictModel):
     seconds: float = Field(default=180.0, gt=0, le=3600)
     command_seconds: float = Field(default=30.0, gt=0, le=120)
     output_bytes: int = Field(default=16_000, ge=256, le=100_000)
+    children: int = Field(default=2, ge=1, le=10)
     max_output_tokens: int = Field(default=2048, ge=128, le=16384)
 
 
@@ -45,6 +48,23 @@ class Finish(StrictModel):
     limitations: list[str] = Field(max_length=20)
 
 
+class Delegate(StrictModel):
+    task: str = Field(min_length=1, max_length=4000)
+    context: str = Field(max_length=8000)
+    allowed_tools: list[Literal["list_files", "search_files", "read_file"]] = Field(
+        min_length=1, max_length=3
+    )
+    turns: int = Field(ge=1, le=20)
+    tool_calls: int = Field(ge=1, le=30)
+    seconds: float = Field(gt=0, le=120)
+
+
+class Findings(StrictModel):
+    findings: str = Field(min_length=1, max_length=4000)
+    evidence_paths: list[str] = Field(max_length=20)
+    limitations: list[str] = Field(max_length=20)
+
+
 TOOLS = {
     "list_files": (ListFiles, "List relative files containing query; use empty query for all."),
     "search_files": (SearchFiles, "Search literal text, returning paths and line numbers."),
@@ -55,7 +75,13 @@ TOOLS = {
 }
 
 
-def tool_schemas() -> list[dict]:
+DELEGATE_TOOL = (
+    Delegate,
+    "Ask a read-only investigator; shares total run budgets. No recursive delegation.",
+)
+
+
+def tool_schemas(tools=None) -> list[dict]:
     return [
         {
             "type": "function",
@@ -64,5 +90,5 @@ def tool_schemas() -> list[dict]:
             "parameters": model.model_json_schema(),
             "strict": True,
         }
-        for name, (model, description) in TOOLS.items()
+        for name, (model, description) in (TOOLS if tools is None else tools).items()
     ]

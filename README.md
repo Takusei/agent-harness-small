@@ -1,10 +1,9 @@
 # Coding agent harness
 
-Milestone 1 is a Python/uv CLI with an explicit single-agent loop, an OpenAI
-Responses provider, a deterministic scripted provider, Docker tools, and patch
-artifacts. It does not use an agent orchestration framework. See [PLAN.md](PLAN.md)
-for later work; delegation, independent evaluation, memory and recovery are not
-implemented yet.
+Milestones 1–2 provide a Python/uv CLI with an explicit agent loop, optional
+read-only delegation, an OpenAI Responses provider, a deterministic scripted
+provider, Docker tools, and patch artifacts. It does not use an agent orchestration framework. See [PLAN.md](PLAN.md)
+for later work; independent evaluation, memory and recovery are not implemented yet.
 
 The planned memory integration targets the standalone
 [Agentic Memory MCP server](../agentic-memory-mcp/README.md). Milestone 4 will
@@ -47,6 +46,51 @@ Progress appears on stderr and the final result JSON on stdout. Set `--output` t
 a **new**, separate directory to choose an artifact location. Existing run
 directories are never reused. Exit codes: 0 completed with passing visible checks,
 1 failed, 2 invalid setup/arguments, 130 cancelled.
+
+## Read-only delegation (milestone 2)
+
+Delegation is opt-in. These deterministic demonstrations use real Docker tools
+and predetermined responses, with no model API calls:
+
+```sh
+uv run agent-harness --repo fixtures/inclusive_sum --scripted inclusive_sum --delegate
+uv run agent-harness --repo fixtures/slugify --scripted slugify --delegate
+```
+
+Without `--delegate`, the existing single-agent mode is preserved. With it, the
+parent gains a `delegate` tool. The scripted demo delegates once, then follows
+its predetermined repair sequence; it does not infer a patch from the findings.
+For an explicitly requested `--live` run, the same flag enables model-selected
+delegation using the same model transport, with separate message lists.
+
+The parent supplies task text, selected context, an allowlist of list/search/read
+file tools, and child turn/tool/time limits. Each child receives a fresh snapshot
+of the candidate workspace at delegation time, mounted **read-only** in Docker.
+It cannot edit, run shell commands, or spawn another child. Only the selected
+context crosses the conversation boundary; the parent transcript and baseline
+output are not automatically copied. The snapshot includes the selected repository
+files, so this is conversation isolation, not secrecy between repository files.
+
+Concurrency is fixed at one child: the parent awaits the result before continuing.
+`--max-children` (or `HARNESS_MAX_CHILDREN`, default 2) bounds total children per run.
+`--max-turns`, `--max-tools`, and `--max-seconds` are shared across parent and
+children; the delegation call itself counts as a parent tool call. Each child is
+also bounded by its requested limits (at most 20 turns, 30 tools, 120 seconds).
+Token usage is aggregated into the run totals, with child subtotals. There is no
+separate total-token or dollar-cost cap; output tokens remain bounded per response.
+
+Child findings include status, evidence paths, limitations, usage, and errors.
+Evidence paths must exist in the child's snapshot; that does not prove the
+findings correct. Failures and local timeouts return to the parent, which may
+continue if the shared budget permits. Parent cancellation/deadlines cancel child
+work and clean up the active container. Cleanup errors prevent run success.
+
+CLI progress shows child IDs, lifecycle, status, and evidence. `events.jsonl`
+contains child events with `task_id`, `parent_task_id`, and `delegate_call_id`.
+`result.json` includes a `children` array. Each `children/<id>/` directory retains
+its own `result.json`, read-only-in-container `workspace/`, and `artifacts/`.
+Child results are unverified advice; evaluator-owned checks remain milestone 3.
+See [docs/milestone-2.md](docs/milestone-2.md) for validation.
 
 ## Live smoke run (consumes API tokens)
 
@@ -104,8 +148,9 @@ inside it. `workspace.py` copies inputs and exports diffs without executing code
 
 The loop validates one tool call per turn. Invalid arguments become observations;
 model failures, duplicate call IDs, or exhausted budgets terminate explicitly.
-Tools are `list_files`, `search_files`, `read_file`, `edit_file`, `run_command`, and
-`finish`. Edits require a fresh read hash and exactly one matching old string.
+Parent tools are `list_files`, `search_files`, `read_file`, `edit_file`,
+`run_command`, and `finish`, plus `delegate` when enabled. `delegation.py` owns the
+child loop, result contract, and shared accounting. Edits require a fresh read hash and exactly one matching old string.
 Commands and edits invalidate prior read hashes. New files can be created via a
 container command; there is no separate create-file tool in this slice.
 

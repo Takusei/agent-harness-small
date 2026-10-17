@@ -17,7 +17,10 @@ class DockerExecutor:
         image: str,
         output_bytes: int = 16_000,
         command_seconds: float = 30,
+        *,
+        read_only: bool = False,
     ):
+        self.read_only = read_only
         self.workspace = workspace.resolve(strict=True)
         if not self.workspace.is_dir() or "," in str(self.workspace):
             raise ValueError("Workspace must be a directory with no comma in its path")
@@ -57,7 +60,8 @@ class DockerExecutor:
             "--env=PYTHONDONTWRITEBYTECODE=1",
             "--env=PYTHONUNBUFFERED=1",
             "--mount",
-            f"type=bind,source={self.workspace},target=/workspace",
+            f"type=bind,source={self.workspace},target=/workspace"
+            + (",readonly" if self.read_only else ""),
             "--entrypoint=python",
             self.image,
         ]

@@ -53,3 +53,10 @@ def test_blank_local_key_rejects_live_before_execution(tmp_path, monkeypatch):
         cli.main()
     assert exc.value.code == 2
     execute.assert_not_called()
+
+
+def test_delegation_opt_in_and_child_limit():
+    parser = cli.parser({"HARNESS_REPO": "fixture", "HARNESS_MAX_CHILDREN": "3"})
+    assert not parser.parse_args(["--scripted", "slugify"]).delegate
+    args = parser.parse_args(["--scripted", "slugify", "--delegate", "--max-children", "1"])
+    assert args.delegate and args.max_children == 1

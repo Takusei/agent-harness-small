@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from agent_harness.execution import DockerExecutor
-from agent_harness.providers import ScriptedProvider, demo_actions
+from agent_harness.providers import (
+    ScriptedProvider,
+    demo_actions,
+    investigation_request,
+    investigator_actions,
+)
 from agent_harness.runtime import run
 from agent_harness.workspace import snapshot
 
@@ -34,11 +39,19 @@ def executor(tmp_path):
 
 
 @pytest.mark.parametrize("fixture", ["inclusive_sum", "slugify"])
-async def test_end_to_end(tmp_path, fixture):
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_end_to_end(tmp_path, fixture, delegated):
     source = ROOT / "fixtures" / fixture
     before = snapshot(source)
+    actions = ([("delegate", investigation_request())] if delegated else []) + demo_actions(fixture)
     result = await run(
-        source, tmp_path / "run", "Fix the bug", ScriptedProvider(demo_actions(fixture))
+        source,
+        tmp_path / "run",
+        "Fix the bug",
+        ScriptedProvider(actions),
+        child_provider_factory=(lambda: ScriptedProvider(investigator_actions(fixture)))
+        if delegated
+        else None,
     )
     assert result["status"] == "succeeded", result
     assert result["baseline"]["exit_code"] == 1
@@ -46,6 +59,11 @@ async def test_end_to_end(tmp_path, fixture):
     assert result["usage"]["total_tokens"] == 0
     assert snapshot(source) == before
     assert (tmp_path / "run/patch.diff").read_text().startswith("diff --git")
+    if delegated:
+        child = result["children"][0]
+        assert child["status"] == "succeeded"
+        assert snapshot(tmp_path / "run" / child["workspace"]) == before
+        assert result["model_calls"] == result["tool_calls"] == 10
 
 
 async def test_command_failure_and_output_bounds(executor):
@@ -130,3 +148,89 @@ PY""")
     assert data["uid"] != 0
     assert data["key"] is None
     assert not any(data[k] for k in ("socket", "network", "writable_root"))
+
+
+async def test_child_mount_is_really_read_only(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "module.py").write_text("a = 1\n")
+    child = DockerExecutor(workspace, tmp_path / "artifacts", IMAGE, read_only=True)
+    assert ",readonly" in " ".join(child.docker_args("test"))
+    # Deliberately bypass model tool dispatch to test the Docker boundary itself.
+    result = await child.shell("echo changed > module.py; touch forbidden")
+    assert result["exit_code"] != 0
+    assert "Read-only file system" in result["stderr"]["text"]
+    assert not (workspace / "forbidden").exists()
+    assert (workspace / "module.py").read_text() == "a = 1\n"
+    await child.file("read_file", {"path": "module.py", "start": 1, "count": 10})
+    result = await child.file("edit_file", {"path": "module.py", "old": "1", "new": "2"})
+    assert "error" in result
+    assert (workspace / "module.py").read_text() == "a = 1\n"
+
+
+@pytest.mark.parametrize("stop", ["cancel", "timeout"])
+async def test_active_child_container_cleanup(tmp_path, stop):
+    started = asyncio.Event()
+    children = []
+
+    class SlowReadExecutor(DockerExecutor):
+        async def file(self, name, arguments):
+            if not self.read_only:
+                return await super().file(name, arguments)
+            children.append(self)
+            # Only a deterministic test injects this command, inside Docker.
+            # The investigator itself has no command tool.
+            task = asyncio.create_task(self.shell("echo child-started; sleep 60"))
+            try:
+                for _ in range(100):
+                    if self.active:
+                        inspected = await asyncio.to_thread(
+                            subprocess.run,
+                            ["docker", "inspect", "--format={{.State.Running}}", self.active],
+                            capture_output=True,
+                            timeout=2,
+                        )
+                        if inspected.returncode == 0 and inspected.stdout.strip() == b"true":
+                            started.set()
+                            break
+                    await asyncio.sleep(0.02)
+                return await task
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    request = {**investigation_request(), "seconds": 2.0 if stop == "timeout" else 30.0}
+    parent = ScriptedProvider([("delegate", request), *demo_actions("inclusive_sum")])
+    task = asyncio.create_task(
+        run(
+            ROOT / "fixtures/inclusive_sum",
+            tmp_path / "run",
+            "repair",
+            parent,
+            executor_factory=SlowReadExecutor,
+            child_provider_factory=lambda: ScriptedProvider(
+                [("read_file", {"path": "math_utils.py", "start": 1, "count": 10})]
+            ),
+        )
+    )
+    try:
+        await asyncio.wait_for(started.wait(), 10)
+        name = children[0].active
+        if stop == "cancel":
+            task.cancel()
+        result = await asyncio.wait_for(task, 20)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert result["status"] == ("cancelled" if stop == "cancel" else "succeeded")
+    assert result["children"][0]["status"] == ("cancelled" if stop == "cancel" else "failed")
+    assert result["cleanup_errors"] == []
+    inspected = await asyncio.to_thread(
+        subprocess.run,
+        ["docker", "inspect", name],
+        capture_output=True,
+    )
+    assert inspected.returncode != 0
+    assert children[0].active is None

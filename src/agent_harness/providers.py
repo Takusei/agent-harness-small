@@ -106,3 +106,35 @@ def demo_actions(fixture: str) -> list[tuple[str, dict]]:
             },
         ),
     ]
+
+
+def investigation_request():
+    return {
+        "task": "Inspect the fixture and identify the bug; do not edit.",
+        "context": "Look for boundary or whitespace handling errors.",
+        "allowed_tools": ["list_files", "search_files", "read_file"],
+        "turns": 4,
+        "tool_calls": 4,
+        "seconds": 30.0,
+    }
+
+
+def investigator_actions(fixture):
+    path = "math_utils.py" if fixture == "inclusive_sum" else "text_utils.py"
+    finding = (
+        "range(n) excludes the upper bound; use range(n + 1)."
+        if fixture == "inclusive_sum"
+        else "Splitting on a literal space retains empty fields; use split()."
+    )
+    return [
+        ("list_files", {"query": ""}),
+        ("read_file", {"path": path, "start": 1, "count": 200}),
+        (
+            "finish",
+            {
+                "findings": finding,
+                "evidence_paths": [path],
+                "limitations": ["Predetermined scripted findings, not live AI."],
+            },
+        ),
+    ]

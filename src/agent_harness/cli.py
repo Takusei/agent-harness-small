@@ -9,7 +9,13 @@ import uuid
 from pathlib import Path
 
 from agent_harness.config import settings
-from agent_harness.providers import OpenAIProvider, ScriptedProvider, demo_actions
+from agent_harness.providers import (
+    OpenAIProvider,
+    ScriptedProvider,
+    demo_actions,
+    investigation_request,
+    investigator_actions,
+)
 from agent_harness.runtime import run
 from agent_harness.schema import Limits
 
@@ -25,6 +31,10 @@ def parser(config=None):
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--scripted", choices=["inclusive_sum", "slugify"])
     mode.add_argument("--live", action="store_true", help="Consumes paid OpenAI API calls")
+    p.add_argument(
+        "--delegate", action="store_true", help="Enable one read-only investigator at a time"
+    )
+    p.add_argument("--max-children", type=int, default=value("MAX_CHILDREN", 2))
     p.add_argument("--model", default=value("MODEL"), help="Model ID, or HARNESS_MODEL")
     p.add_argument(
         "--task",
@@ -51,8 +61,20 @@ async def execute(args, limits):
     provider = (
         OpenAIProvider(args.model, limits.max_output_tokens, api_key=args.api_key)
         if args.live
-        else ScriptedProvider(demo_actions(args.scripted))
+        else ScriptedProvider(
+            ([("delegate", investigation_request())] if args.delegate else [])
+            + demo_actions(args.scripted)
+        )
     )
+    # OpenAIProvider is a stateless transport; each child owns its message list.
+    # Scripted children require a fresh action iterator per invocation.
+    child_factory = None
+    if args.delegate:
+        child_factory = (
+            (lambda: provider)
+            if args.live
+            else (lambda: ScriptedProvider(investigator_actions(args.scripted)))
+        )
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
     interrupted = False
@@ -68,6 +90,11 @@ async def execute(args, limits):
 
     def progress(kind, data):
         detail = data.get("name", data.get("phase", ""))
+        if data.get("parent_task_id"):
+            detail = f"child={data['task_id']} {detail}"
+        if kind == "child_finished":
+            child = data["result"]
+            detail += f" status={child['status']} evidence={child['evidence_paths']}"
         print(f"{kind} {detail}".rstrip(), file=sys.stderr, flush=True)
 
     try:
@@ -80,6 +107,7 @@ async def execute(args, limits):
             args.image,
             args.check,
             progress=progress,
+            child_provider_factory=child_factory,
         )
     finally:
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -100,6 +128,7 @@ def main():
     try:
         limits = Limits(
             turns=args.max_turns,
+            children=args.max_children,
             tool_calls=args.max_tools,
             seconds=args.max_seconds,
             command_seconds=args.command_seconds,

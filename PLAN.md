@@ -15,9 +15,10 @@ tool dispatch, budgets, and recovery. Use a provider adapter so deterministic
 scripted responses and a real model exercise the same runtime.
 
 No public launch is required. Initial deliverables are a CLI, reproducible
-fixtures, readable traces, and an evaluation report. Milestone 1 is implemented;
-see [README.md](README.md) and the [validation record](docs/milestone-1.md).
-Milestones 2–6 remain planned. Recorded results are historical evidence, not a
+fixtures, readable traces, and an evaluation report. Milestones 1–2 are implemented;
+see [README.md](README.md) and the validation records for
+[milestone 1](docs/milestone-1.md) and [milestone 2](docs/milestone-2.md).
+Milestones 3–6 remain planned. Recorded results are historical evidence, not a
 claim that checks were rerun during this documentation update.
 
 ## First supported workflow
@@ -247,9 +248,9 @@ report; use observed failures to choose further work.
 
 ## Suggested continuation prompt in a new Codex session
 
-> Read AGENTS.md, PLAN.md, README.md, and docs/milestone-1.md. Continue with
-> milestone 2 using uv, building on the existing single-agent implementation.
-> Add bounded delegation and a read-only investigator with isolated context.
-> Preserve milestone 1 behavior and verify the new delegation acceptance criteria.
-> Leave sibling projects unchanged; integration with agentic-memory-mcp belongs
-> to milestone 4.
+> Read AGENTS.md, PLAN.md, README.md, and docs/milestone-2.md. Continue with
+> milestone 3 using uv, building on the existing single-agent and delegated modes.
+> Add evaluator-owned checks and baseline/candidate comparison. Keep evaluator
+> fixtures unavailable to the editing agent and distinguish verified success,
+> verified failure, and inconclusive outcomes. Leave sibling projects unchanged;
+> integration with agentic-memory-mcp belongs to milestone 4.
