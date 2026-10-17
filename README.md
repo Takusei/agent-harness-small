@@ -6,6 +6,12 @@ artifacts. It does not use an agent orchestration framework. See [PLAN.md](PLAN.
 for later work; delegation, independent evaluation, memory and recovery are not
 implemented yet.
 
+The planned memory integration targets the standalone
+[Agentic Memory MCP server](../agentic-memory-mcp/README.md). Milestone 4 will
+connect through MCP with a dedicated experiment store; the server remains a
+separate project with its own uv environment. Its migration is complete, but
+the harness does not yet connect to it. See [PLAN.md](PLAN.md) for the milestones.
+
 ## Setup
 
 Requires macOS/Linux, uv, and a running Docker engine. Python 3.12 is selected by

@@ -10,6 +10,9 @@ verification, recovery, and integration with an existing agent-memory server.
   orchestration runtime. A model SDK and the MCP client SDK are appropriate.
 - Work in milestone order. Deliver working vertical slices before abstractions.
 - Existing sibling repositories are read-only references, not dependencies to edit.
+- The memory integration target is `../agentic-memory-mcp/`. Connect through MCP;
+  keep its dependencies separate and use dedicated harness memory storage rather
+  than its default `data/` directory. Memory integration belongs to milestone 4.
 - Keep real model calls separate from deterministic tests. Label API-consuming
   commands and report actual usage; never describe scripted responses as live AI.
 - Run generated code in the execution container, never directly on the host.
@@ -18,6 +21,7 @@ verification, recovery, and integration with an existing agent-memory server.
 - Do not automatically publish, deploy, push commits, or modify external repos.
 - Report what was implemented, how it was verified, and remaining limitations.
 
-The plan is proposed work, not evidence of implemented capabilities. When asked
-to begin implementation, start with milestone 1; no new architecture approval is
-needed for routine choices consistent with the plan.
+Consult `README.md` and `docs/milestone-1.md` for the implemented baseline and
+recorded validation. Milestone 1 is implemented; milestones 2–6 remain planned.
+When asked to continue implementation, start with the next unfinished milestone;
+no new architecture approval is needed for routine choices consistent with the plan.

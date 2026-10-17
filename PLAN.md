@@ -15,8 +15,10 @@ tool dispatch, budgets, and recovery. Use a provider adapter so deterministic
 scripted responses and a real model exercise the same runtime.
 
 No public launch is required. Initial deliverables are a CLI, reproducible
-fixtures, readable traces, and an evaluation report. This directory currently
-contains planning documents only; do not claim implementation or test results.
+fixtures, readable traces, and an evaluation report. Milestone 1 is implemented;
+see [README.md](README.md) and the [validation record](docs/milestone-1.md).
+Milestones 2–6 remain planned. Recorded results are historical evidence, not a
+claim that checks were rerun during this documentation update.
 
 ## First supported workflow
 
@@ -39,13 +41,17 @@ are later possibilities, not requirements for v1.
 - `../poc/coding-agent-langchain/`: inspect its Docker executor, file guards,
   CLI, checkpoint/journal design, and deterministic demo. Reuse small appropriate
   utilities with attribution where needed; do not copy the whole LangGraph runtime.
-- `../ebay-interview-prj/`: existing MCP memory server. Read its `AGENTS.md`,
+- `../agentic-memory-mcp/`: standalone MCP memory server. Read its `AGENTS.md`,
   `README.md`, and `src/README.md` before integration. Its core API includes
   `memory_lookup`, `memory_get`, `memory_rate`, `memory_save_trace`,
   `memory_trace_status`, and `memory_worker_status`.
 - That memory project already implements hybrid retrieval, progressive disclosure,
   trace distillation, merge/feedback, and archival. Reuse it through an adapter;
   do not rebuild those systems here or modify its runtime data during inspection.
+- Keep the projects independently runnable: the harness owns execution and
+  verification; the memory server owns retrieval and the memory lifecycle.
+  Configure the server location rather than hardcoding this sibling checkout.
+  Do not import its implementation or copy its dependencies into the harness.
 
 JEV was mentioned earlier but its intended meaning remains unconfirmed. It is
 not a dependency or requirement. Do not let it block the agreed harness work.
@@ -169,16 +175,33 @@ budget exhaustion are checked; the same fixture runs with delegation on and off.
 
 Done when: success depends on evaluator results and artifacts are reproducible.
 
-### 4. Existing memory integration — 6–10 hours
+### 4. Standalone MCP memory integration — 6–10 hours
 
-- Add a disabled adapter and an MCP client adapter for the eBay memory server.
-- Use a dedicated experiment memory store, never the existing default store.
+- Add a disabled adapter and an MCP client adapter for `agentic-memory-mcp`.
+  The Python package/module remains `agentic_memory`; the checkout folder name
+  is not the import name.
+- Support a configurable stdio server command, arguments, and environment. The
+  local integration should launch `uv run --locked --directory <server-checkout>
+  python -m agentic_memory.mcp_server.server` using the server's own environment.
+- Use absolute paths for dedicated experiment storage via `MEMORY_DATA_DIR`,
+  `CHROMA_PERSIST_DIR`, `TRACE_DIR`, and `TRACE_STATUS_DB_PATH`. Never use or reset
+  the server checkout's existing default store. Keep this storage outside the
+  agent execution sandbox and separate from evaluator-owned fixtures.
+- Keep the MCP client/server connection on the host; execution containers receive
+  neither the memory database nor server credentials. Bound startup and tool-call
+  timeouts, close owned subprocesses, and surface connection errors.
 - Support retrieval, progressive disclosure, feedback, trace submission, and
   reporting of pending/completed distillation without indefinite waiting.
 - Separate useful, stale, incorrect, and irrelevant memory outcomes.
+- Test adapter contracts with a stub MCP server, then run a separately documented
+  integration against the standalone server and an isolated store. Label optional
+  LLM distillation calls as API-consuming; do not equate a queued trace with a
+  completed memory. Record the tested server revision for reproducibility.
 
 Done when: memory-disabled execution works; unavailable memory fails gracefully;
-one transfer task uses relevant memory and one stale-memory task rejects it.
+one transfer task uses relevant memory and one stale-memory task rejects it;
+the standalone server's existing data remains untouched. Migration of the server
+is complete, but does not itself complete this harness integration milestone.
 
 ### 5. Checkpoint and recovery — 6–10 hours
 
@@ -222,10 +245,11 @@ Reassess after milestone 3: if delegation adds complexity without benefit, retai
 it as an evaluated optional mode. Stop v1 after a credible local demo and evaluation
 report; use observed failures to choose further work.
 
-## Suggested first prompt in a new Codex session
+## Suggested continuation prompt in a new Codex session
 
-> Read AGENTS.md and PLAN.md. Implement milestone 1 using uv. Inspect the referenced
-> coding-agent project for reusable ideas, but build the orchestration here and
-> leave sibling projects unchanged. Verify current SDK interfaces before choosing
-> dependency versions. Deliver a working CLI, Docker-backed tool execution,
-> deterministic end-to-end checks, and instructions for an optional live-model run.
+> Read AGENTS.md, PLAN.md, README.md, and docs/milestone-1.md. Continue with
+> milestone 2 using uv, building on the existing single-agent implementation.
+> Add bounded delegation and a read-only investigator with isolated context.
+> Preserve milestone 1 behavior and verify the new delegation acceptance criteria.
+> Leave sibling projects unchanged; integration with agentic-memory-mcp belongs
+> to milestone 4.
