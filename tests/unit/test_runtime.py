@@ -47,8 +47,8 @@ FINISH = ("finish", {"summary": "Done", "limitations": []})
 
 async def test_finish_and_observable_journal(source, tmp_path):
     result = await invoke(source, tmp_path, ScriptedProvider([FINISH]))
-    assert result["status"] == "succeeded"
-    assert result["verification"] == "not_independently_verified"
+    assert result["status"] == "inconclusive"
+    assert result["verification"] == "inconclusive"
     assert result["usage"]["total_tokens"] == 0
     assert (source / "module.py").read_text() == "a = 1\n"
     events = [json.loads(line) for line in (tmp_path / "run/events.jsonl").read_text().splitlines()]
@@ -67,7 +67,7 @@ async def test_finish_and_observable_journal(source, tmp_path):
 )
 async def test_invalid_arguments_are_observations(source, tmp_path, action):
     result = await invoke(source, tmp_path, ScriptedProvider([action, FINISH]))
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     assert FakeExecutor.instances[-1].files == []
     assert len(FakeExecutor.instances[-1].commands) == 2  # baseline and final only
     events = (tmp_path / "run/events.jsonl").read_text()
@@ -123,7 +123,7 @@ async def test_malformed_json(source, tmp_path):
             return Turn([Call("done", "finish", json.dumps(FINISH[1]))])
 
     result = await invoke(source, tmp_path, Malformed())
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     assert FakeExecutor.instances[-1].files == []
 
 

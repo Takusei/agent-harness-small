@@ -87,11 +87,15 @@ class OpenAIProvider:
 
 
 def demo_actions(fixture: str) -> list[tuple[str, dict]]:
+    superficial = fixture == "inclusive_sum_superficial"
+    fixture = "inclusive_sum" if superficial else fixture
     edits = {
         "inclusive_sum": ("math_utils.py", "range(n)", "range(n + 1)"),
         "slugify": ("text_utils.py", 'text.strip().split(" ")', "text.strip().split()"),
     }
     path, old, new = edits[fixture]
+    if superficial:
+        old, new = "sum(range(n))", "{0: 0, 1: 1, 3: 6}.get(n, 0)"
     return [
         ("list_files", {"query": ""}),
         ("search_files", {"query": "def "}),
@@ -120,6 +124,8 @@ def investigation_request():
 
 
 def investigator_actions(fixture):
+    if fixture == "inclusive_sum_superficial":
+        fixture = "inclusive_sum"
     path = "math_utils.py" if fixture == "inclusive_sum" else "text_utils.py"
     finding = (
         "range(n) excludes the upper bound; use range(n + 1)."

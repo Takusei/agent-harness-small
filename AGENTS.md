@@ -21,8 +21,8 @@ verification, recovery, and integration with an existing agent-memory server.
 - Do not automatically publish, deploy, push commits, or modify external repos.
 - Report what was implemented, how it was verified, and remaining limitations.
 
-Consult `README.md`, `docs/milestone-1.md`, and `docs/milestone-2.md` for the
-implemented baseline and recorded validation. Milestones 1–2 are implemented;
-milestones 3–6 remain planned.
+Consult `README.md` and `docs/milestone-{1,2,3}.md` for the implemented baseline
+and recorded validation. Milestones 1–3 are implemented; milestones 4–6 remain
+planned.
 When asked to continue implementation, start with the next unfinished milestone;
 no new architecture approval is needed for routine choices consistent with the plan.

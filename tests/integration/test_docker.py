@@ -49,6 +49,7 @@ async def test_end_to_end(tmp_path, fixture, delegated):
         tmp_path / "run",
         "Fix the bug",
         ScriptedProvider(actions),
+        evaluator=fixture,
         child_provider_factory=(lambda: ScriptedProvider(investigator_actions(fixture)))
         if delegated
         else None,
@@ -224,7 +225,7 @@ async def test_active_child_container_cleanup(tmp_path, stop):
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-    assert result["status"] == ("cancelled" if stop == "cancel" else "succeeded")
+    assert result["status"] == ("cancelled" if stop == "cancel" else "inconclusive")
     assert result["children"][0]["status"] == ("cancelled" if stop == "cancel" else "failed")
     assert result["cleanup_errors"] == []
     inspected = await asyncio.to_thread(
@@ -234,3 +235,138 @@ async def test_active_child_container_cleanup(tmp_path, stop):
     )
     assert inspected.returncode != 0
     assert children[0].active is None
+
+
+async def test_superficial_patch_passes_visible_but_fails_evaluator(tmp_path):
+    result = await run(
+        ROOT / "fixtures/inclusive_sum",
+        tmp_path / "run",
+        "repair",
+        ScriptedProvider(demo_actions("inclusive_sum_superficial")),
+        evaluator="inclusive_sum",
+    )
+    assert result["candidate"]["exit_code"] == 0
+    assert result["status"] == "failed"
+    assert result["verification"] == "verified_failure"
+    cases = {c["id"]: c["status"] for c in result["evaluation"]["candidate"]["cases"]}
+    assert cases == {
+        "zero": "pass",
+        "one": "pass",
+        "three": "pass",
+        "two": "fail",
+        "ten": "fail",
+        "hundred": "fail",
+    }
+    assert result["evaluation"]["comparison"]["fixed"] == ["one", "three"]
+    assert result["evaluation"]["comparison"]["persistent_failures"] == ["two", "ten", "hundred"]
+
+
+async def test_editing_visible_tests_cannot_make_verified_success(tmp_path):
+    actions = [
+        (
+            "run_command",
+            {
+                "command": "printf 'import unittest\nclass Tests(unittest.TestCase):\n"
+                "    def test_fake(self): self.assertTrue(True)\n' > test_math_utils.py"
+            },
+        ),
+        ("finish", {"summary": "Tests pass", "limitations": []}),
+    ]
+    result = await run(
+        ROOT / "fixtures/inclusive_sum",
+        tmp_path / "run",
+        "repair",
+        ScriptedProvider(actions),
+        evaluator="inclusive_sum",
+    )
+    assert result["candidate"]["exit_code"] == 0
+    assert result["verification"] == "verified_failure"
+    assert result["status"] == "failed"
+
+
+async def test_regressions_are_distinct_from_existing_failures(tmp_path):
+    actions = demo_actions("inclusive_sum")
+    actions[3][1]["new"] = "range(n + 1) if n else [1]"
+    result = await run(
+        ROOT / "fixtures/inclusive_sum",
+        tmp_path / "run",
+        "repair",
+        ScriptedProvider(actions),
+        evaluator="inclusive_sum",
+    )
+    assert result["verification"] == "verified_failure"
+    comparison = result["evaluation"]["comparison"]
+    assert comparison["regressions"] == ["zero"]
+    assert comparison["fixed"] == ["one", "three", "two", "ten", "hundred"]
+    assert comparison["persistent_failures"] == []
+
+
+async def test_evaluator_data_not_exposed_to_agent(tmp_path):
+    class Observed(ScriptedProvider):
+        async def respond(self, messages, tools, timeout):
+            serialized = json.dumps(messages)
+            assert "checks_sha256" not in serialized
+            assert "hundred" not in serialized
+            assert "verification_finished" not in serialized
+            return await super().respond(messages, tools, timeout)
+
+    probe = (
+        "run_command",
+        {
+            "command": "test ! -e /workspace/verification && test ! -e /verification "
+            "&& test ! -e /workspace/../verification && echo evaluator-not-mounted"
+        },
+    )
+    result = await run(
+        ROOT / "fixtures/inclusive_sum",
+        tmp_path / "run",
+        "repair",
+        Observed([probe, *demo_actions("inclusive_sum")]),
+        evaluator="inclusive_sum",
+    )
+    assert result["verification"] == "verified_success"
+    journal = (tmp_path / "run/events.jsonl").read_text()
+    assert "evaluator-not-mounted" in journal
+    manifest = json.loads((tmp_path / "run/verification/manifest.json").read_text())
+    assert manifest["checks_sha256"] and manifest["runner_sha256"]
+    assert (tmp_path / "run/verification/candidate/workspace/math_utils.py").read_bytes() == (
+        tmp_path / "run/workspace/math_utils.py"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "body, outcome",
+    [
+        ("import os; os._exit(0)", "inconclusive"),
+        ("raise ValueError('bad candidate')", "verified_failure"),
+    ],
+)
+async def test_candidate_crash_cannot_claim_success(tmp_path, body, outcome):
+    actions = [
+        ("run_command", {"command": f"printf '%s\\n' \"{body}\" > math_utils.py"}),
+        ("finish", {"summary": "Claimed success", "limitations": []}),
+    ]
+    # Keep visible command independent to exercise evaluator classification alone.
+    result = await run(
+        ROOT / "fixtures/inclusive_sum",
+        tmp_path / "run",
+        "repair",
+        ScriptedProvider(actions),
+        evaluator="inclusive_sum",
+        check="true",
+    )
+    assert result["verification"] == outcome
+    assert result["status"] != "succeeded"
+
+
+async def test_verifier_timeout_is_inconclusive_and_preserves_snapshot(tmp_path):
+    from agent_harness.schema import Limits
+    from agent_harness.verification import FixtureVerifier
+
+    verifier = FixtureVerifier("inclusive_sum", tmp_path, IMAGE, Limits(command_seconds=0.3))
+    files = {"math_utils.py": (b"def inclusive_sum(n):\n    while True: pass\n", 0o644)}
+    result = await verifier.evaluate(files, "candidate")
+    assert result["status"] == "inconclusive"
+    assert all(c["execution"]["stop_reason"] == "timeout" for c in result["cases"])
+    assert verifier.cleanup_errors == []
+    assert snapshot(tmp_path / "verification/candidate/workspace") == files

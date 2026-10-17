@@ -14,6 +14,7 @@ from agent_harness.delegation import investigate
 from agent_harness.execution import DockerExecutor
 from agent_harness.providers import Provider
 from agent_harness.schema import DELEGATE_TOOL, TOOLS, Limits, tool_schemas
+from agent_harness.verification import PROFILES, FixtureVerifier, compare
 from agent_harness.workspace import copy_snapshot, make_patch, snapshot
 
 SYSTEM = """Repair the supplied small Python repository using the available tools.
@@ -59,6 +60,7 @@ async def run(
     executor_factory=DockerExecutor,
     progress=None,
     child_provider_factory=None,
+    evaluator: str | None = None,
 ) -> dict:
     limits = limits or Limits()
     source, output = source.resolve(strict=True), output.resolve()
@@ -66,6 +68,11 @@ async def run(
         raise ValueError("Source must be a directory")
     if output.is_relative_to(source) or source.is_relative_to(output):
         raise ValueError("Output and source directories must be separate, not nested")
+    if evaluator is not None:
+        if evaluator not in PROFILES:
+            raise ValueError("Unknown evaluator profile")
+        if Path(__file__).resolve().parent.is_relative_to(source):
+            raise ValueError("Source must not contain the harness or evaluator implementation")
     before = snapshot(source)
     output.mkdir(parents=True, exist_ok=False)
     copy_snapshot(before, output / "workspace")
@@ -78,6 +85,8 @@ async def run(
         limits.output_bytes,
         limits.command_seconds,
     )
+    verifier = FixtureVerifier(evaluator, output, image, limits) if evaluator else None
+    frozen_candidate = None
     started = time.monotonic()
     result = {
         "run_id": run_id,
@@ -94,7 +103,15 @@ async def run(
         "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         "usage_complete": True,
         "cost_usd": None,
-        "verification": "not_independently_verified",
+        "verification": "inconclusive",
+        "evaluation": {
+            "profile": evaluator,
+            "artifacts": "verification" if evaluator else None,
+            "baseline": None,
+            "candidate": None,
+            "comparison": {},
+            "reason": "Verification has not completed" if evaluator else "No evaluator configured",
+        },
         "baseline": None,
         "candidate": None,
         "finish": None,
@@ -131,8 +148,21 @@ async def run(
             raise RuntimeError(f"{phase} check could not execute; inspect stderr artifact")
         return observation
 
+    async def evaluate(files, phase):
+        emit("verification_started", phase=phase)
+        report = await verifier.evaluate(files, phase)
+        result["evaluation"][phase] = report
+        emit("verification_finished", phase=phase, result=report)
+        return report
+
     try:
-        async with asyncio.timeout(limits.seconds):
+        async with asyncio.timeout_at(started + limits.seconds):
+            if verifier:
+                baseline = await evaluate(before, "baseline")
+                if baseline["status"] == "inconclusive":
+                    raise RuntimeError(
+                        "Baseline evaluation inconclusive; inspect verification artifacts"
+                    )
             await check_suite("baseline")
             messages.append(
                 {
@@ -144,6 +174,8 @@ async def run(
                 if result["model_calls"] >= limits.turns:
                     raise BudgetExceeded("Model turn budget exhausted")
                 remaining = limits.seconds - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise BudgetExceeded("Elapsed time budget exhausted")
                 emit("model_started", turn=turn_index + 1)
                 result["model_calls"] += 1
                 model_pending = True
@@ -223,9 +255,25 @@ async def run(
                 )
                 if result["finish"]:
                     candidate = await check_suite("candidate")
-                    result["status"] = "succeeded" if candidate["exit_code"] == 0 else "failed"
+                    frozen_candidate = snapshot(output / "workspace")
+                    if verifier:
+                        await evaluate(frozen_candidate, "candidate")
+                        outcome, comparison = compare(
+                            result["evaluation"]["baseline"],
+                            result["evaluation"]["candidate"],
+                            candidate,
+                        )
+                        result["verification"] = outcome
+                        result["evaluation"].update(comparison=comparison, reason=outcome)
+                    result["status"] = {
+                        "verified_success": "succeeded",
+                        "verified_failure": "failed",
+                        "inconclusive": "inconclusive",
+                    }[result["verification"]]
+                    if result["status"] != "succeeded":
+                        result["error"] = result["evaluation"]["reason"]
                     if candidate["exit_code"]:
-                        result["error"] = "Final visible checks failed"
+                        result.update(status="failed", error="Final visible checks failed")
                     break
             else:
                 raise BudgetExceeded("Model turn budget exhausted")
@@ -244,15 +292,30 @@ async def run(
         result["cleanup_errors"] = executor.cleanup_errors + [
             error for child in result["children"] for error in child["cleanup_errors"]
         ]
+        if verifier:
+            result["cleanup_errors"].extend(verifier.cleanup_errors)
         if result["cleanup_errors"]:
-            result.update(status="failed", error="Container cleanup could not be confirmed")
+            result.update(
+                status="failed",
+                verification="inconclusive",
+                error="Container cleanup could not be confirmed",
+            )
         try:
-            after = snapshot(output / "workspace")
+            after = (
+                frozen_candidate if frozen_candidate is not None else snapshot(output / "workspace")
+            )
             patch = make_patch(before, after)
             (output / "patch.diff").write_text(patch)
             result["patch"] = "patch.diff"
         except (ValueError, OSError, UnicodeError) as exc:
-            result.update(status="failed", patch=None, error=f"Patch export failed: {exc}")
+            result.update(
+                status="failed",
+                verification="inconclusive",
+                patch=None,
+                error=f"Patch export failed: {exc}",
+            )
+        if result["verification"] == "inconclusive" and result["error"]:
+            result["evaluation"]["reason"] = result["error"]
         emit("run_finished", **result)
         save()
     return result

@@ -82,7 +82,7 @@ async def test_context_snapshot_events_and_usage(source, tmp_path):
     )
     parent = RecordingProvider([("delegate", investigation_request()), FINISH])
     result = await invoke(source, tmp_path, child, parent=parent)
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     report = result["children"][0]
     assert report["status"] == "succeeded"
     assert result["model_calls"] == result["tool_calls"] == 4
@@ -150,7 +150,7 @@ async def test_shared_budget_stops_parent_and_child(source, tmp_path, limits):
 async def test_child_budget_failure_returned_to_parent(source, tmp_path, budget):
     child = ScriptedProvider([("list_files", {"query": ""}), REPORT])
     result = await invoke(source, tmp_path, child, request={**investigation_request(), **budget})
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     assert result["children"][0]["status"] == "failed"
     assert "budget exhausted" in result["children"][0]["error"]
 
@@ -168,7 +168,7 @@ async def test_child_timeout_parent_can_recover(source, tmp_path):
     result = await invoke(
         source, tmp_path, Hanging(), request={**investigation_request(), "seconds": 0.02}
     )
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     assert result["children"][0]["status"] == "failed"
     assert "elapsed time" in result["children"][0]["error"]
     assert not result["usage_complete"]
@@ -212,7 +212,7 @@ async def test_child_count_cap_and_fresh_provider(source, tmp_path):
         child_provider_factory=factory,
         executor_factory=Executor,
     )
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     assert len(result["children"]) == len(made) == 2
     assert "Child count budget exhausted" in json.dumps(events(tmp_path))
     lifecycle = [e["type"] for e in events(tmp_path) if e["type"].startswith("child_")]
@@ -227,7 +227,7 @@ async def test_disabled_delegation_rejected(source, tmp_path):
         ScriptedProvider([("delegate", investigation_request()), FINISH]),
         executor_factory=Executor,
     )
-    assert result["status"] == "succeeded"
+    assert result["status"] == "inconclusive"
     assert result["children"] == []
     assert "Unknown tool" in json.dumps(events(tmp_path))
 

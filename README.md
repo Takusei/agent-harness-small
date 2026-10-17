@@ -1,9 +1,10 @@
 # Coding agent harness
 
-Milestones 1–2 provide a Python/uv CLI with an explicit agent loop, optional
-read-only delegation, an OpenAI Responses provider, a deterministic scripted
-provider, Docker tools, and patch artifacts. It does not use an agent orchestration framework. See [PLAN.md](PLAN.md)
-for later work; independent evaluation, memory and recovery are not implemented yet.
+Milestones 1–3 provide a Python/uv CLI with an explicit agent loop, optional
+read-only delegation, host-owned fixture verification, an OpenAI Responses
+provider, a deterministic scripted provider, Docker tools, and patch artifacts.
+It does not use an agent orchestration framework. See [PLAN.md](PLAN.md)
+for later work; memory and recovery are not implemented yet.
 
 The planned memory integration targets the standalone
 [Agentic Memory MCP server](../agentic-memory-mcp/README.md). Milestone 4 will
@@ -32,8 +33,8 @@ access is disabled. The base image tag is not digest-pinned yet.
 Run from this directory:
 
 ```sh
-uv run agent-harness --repo fixtures/inclusive_sum --scripted inclusive_sum
-uv run agent-harness --repo fixtures/slugify --scripted slugify
+uv run agent-harness --repo fixtures/inclusive_sum --scripted inclusive_sum --evaluator inclusive_sum
+uv run agent-harness --repo fixtures/slugify --scripted slugify --evaluator slugify
 ```
 
 Each run copies the selected fixture to a fresh `runs/<id>/workspace`, runs the
@@ -44,8 +45,9 @@ not reason, adapt, or call a model.
 
 Progress appears on stderr and the final result JSON on stdout. Set `--output` to
 a **new**, separate directory to choose an artifact location. Existing run
-directories are never reused. Exit codes: 0 completed with passing visible checks,
-1 failed, 2 invalid setup/arguments, 130 cancelled.
+directories are never reused. Exit codes: 0 evaluator-verified success, 1 failed,
+2 invalid setup/arguments, 3 inconclusive, 130 cancelled. Without `--evaluator`,
+a completed repair is inconclusive even when its visible checks pass.
 
 ## Read-only delegation (milestone 2)
 
@@ -53,8 +55,8 @@ Delegation is opt-in. These deterministic demonstrations use real Docker tools
 and predetermined responses, with no model API calls:
 
 ```sh
-uv run agent-harness --repo fixtures/inclusive_sum --scripted inclusive_sum --delegate
-uv run agent-harness --repo fixtures/slugify --scripted slugify --delegate
+uv run agent-harness --repo fixtures/inclusive_sum --scripted inclusive_sum --evaluator inclusive_sum --delegate
+uv run agent-harness --repo fixtures/slugify --scripted slugify --evaluator slugify --delegate
 ```
 
 Without `--delegate`, the existing single-agent mode is preserved. With it, the
@@ -89,8 +91,55 @@ CLI progress shows child IDs, lifecycle, status, and evidence. `events.jsonl`
 contains child events with `task_id`, `parent_task_id`, and `delegate_call_id`.
 `result.json` includes a `children` array. Each `children/<id>/` directory retains
 its own `result.json`, read-only-in-container `workspace/`, and `artifacts/`.
-Child results are unverified advice; evaluator-owned checks remain milestone 3.
+Child results remain unverified advice; the host evaluator determines final success.
 See [docs/milestone-2.md](docs/milestone-2.md) for validation.
+
+## Independent fixture verification (milestone 3)
+
+Select `--evaluator inclusive_sum` or `--evaluator slugify` to match the input
+repository. Profiles are explicit CLI choices, never inferred from the model's
+claims or the selected scripted provider. Generic repositories can still produce
+a patch without an evaluator, but cannot receive verified success.
+
+Before editing, the host evaluates a frozen baseline snapshot. After the parent
+finishes and runs visible checks, it freezes and evaluates the candidate. Each
+profile has six named input/output cases, including inputs outside the visible
+tests. A fresh read-only Docker container calls the target function per case.
+The host compares the returned value and type with an expected answer held outside
+the container. Repository tests, assertions, and exit code zero alone cannot
+supply evaluator success. Candidate exceptions count as failed checks; missing or
+malformed results, unavailable execution, and timeouts are inconclusive.
+
+Evaluator profiles, expected answers, and reports are not mounted into editing or
+child containers and are never included in model messages. Evaluation inputs are
+necessarily visible to candidate code during verification. Profiles are public
+source code in this learning project, not a secret benchmark; this evaluator is
+not a defense against deliberate output spoofing or a complete proof of behavior.
+
+`verification` is `verified_success`, `verified_failure`, or `inconclusive`.
+`evaluation.comparison` lists fixed checks, regressions (baseline pass → candidate
+fail), and persistent failures. All candidate checks must pass; pre-existing
+failures are recorded rather than silently waived. Evaluation is inside the run's
+wall-time budget and uses the command timeout/output/container limits, but does
+not consume model turns or model tokens. Infrastructure errors or cancellation
+can leave partial reports; they never yield verified success.
+
+To demonstrate a superficial repair (expected exit code **1**):
+
+```sh
+uv run agent-harness --repo fixtures/inclusive_sum \
+  --scripted inclusive_sum_superficial --evaluator inclusive_sum
+```
+
+This predetermined patch hardcodes answers for inputs 0, 1, and 3. Visible tests
+pass, but evaluator inputs 2, 10, and 100 fail. The run is `verified_failure`.
+
+`verification/manifest.json` retains the selected profile, cases, limits, configured
+image, and runner/check hashes. The runner and frozen baseline/candidate snapshots
+are retained alongside per-case stdout/stderr and reports. `patch.diff` is exported
+from the same frozen candidate that was evaluated. The image tag is not pinned;
+reproducibility still requires the same local Docker image. See
+[docs/milestone-3.md](docs/milestone-3.md) for validation and limitations.
 
 ## Live smoke run (consumes API tokens)
 
@@ -108,13 +157,13 @@ command, turn/tool/time limits, output bytes, and model output-token limits.
 Run modes always require a CLI flag; `.env` cannot enable paid calls:
 
 ```sh
-uv run agent-harness --scripted inclusive_sum   # uses .env defaults, no API calls
+uv run agent-harness --scripted inclusive_sum --evaluator inclusive_sum  # no API calls
 ```
 
 Once a key is configured, an explicitly requested live run can use:
 
 ```sh
-uv run agent-harness --repo fixtures/inclusive_sum --live --model gpt-5-mini \
+uv run agent-harness --repo fixtures/inclusive_sum --live --model gpt-5-mini --evaluator inclusive_sum \
   --max-turns 10 --max-tools 10 --max-seconds 120
 ```
 
@@ -172,10 +221,10 @@ container command; there is no separate create-file tool in this slice.
 - Docker is practical local isolation, not a guarantee against hostile kernel
   exploits. Workspace disk writes do not have a filesystem quota. Do not run
   against concurrently modified inputs or manually modify an active workspace.
-- `succeeded` means the loop finished and the final **visible** check command
-  returned zero. `verification` stays `not_independently_verified`: the agent can
-  modify visible tests, and a command can pass without exercising useful checks.
-  Evaluator-owned checks belong to milestone 3.
+- `succeeded` requires `verified_success`: completed evaluator baseline/candidate
+  checks, all candidate checks passing, and passing final visible checks. Editing
+  visible tests cannot alter the host's expected answers. Verification covers
+  only the selected finite fixture cases, not arbitrary correctness.
 - SIGINT/SIGTERM cancel active work, remove the container, and retain results.
   SIGKILL/host crashes can leave containers or an unfinished `running` result;
   there is no resume/replay/reconciliation until milestone 5.

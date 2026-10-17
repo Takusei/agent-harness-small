@@ -18,6 +18,7 @@ from agent_harness.providers import (
 )
 from agent_harness.runtime import run
 from agent_harness.schema import Limits
+from agent_harness.verification import PROFILES
 
 
 def parser(config=None):
@@ -29,7 +30,9 @@ def parser(config=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", type=Path, default=value("REPO"), required=not value("REPO"))
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--scripted", choices=["inclusive_sum", "slugify"])
+    mode.add_argument(
+        "--scripted", choices=["inclusive_sum", "slugify", "inclusive_sum_superficial"]
+    )
     mode.add_argument("--live", action="store_true", help="Consumes paid OpenAI API calls")
     p.add_argument(
         "--delegate", action="store_true", help="Enable one read-only investigator at a time"
@@ -47,6 +50,11 @@ def parser(config=None):
         help="New directory outside the source repository",
     )
     p.add_argument("--image", default=value("IMAGE", "agent-harness-exec:local"))
+    p.add_argument(
+        "--evaluator",
+        choices=sorted(PROFILES),
+        help="Host-owned fixture checks; required for verified success",
+    )
     p.add_argument("--check", default=value("CHECK", "python -m unittest discover -v"))
     p.add_argument("--max-turns", type=int, default=value("MAX_TURNS", 16))
     p.add_argument("--max-tools", type=int, default=value("MAX_TOOLS", 30))
@@ -95,6 +103,8 @@ async def execute(args, limits):
         if kind == "child_finished":
             child = data["result"]
             detail += f" status={child['status']} evidence={child['evidence_paths']}"
+        if kind == "verification_finished":
+            detail += f" status={data['result']['status']}"
         print(f"{kind} {detail}".rstrip(), file=sys.stderr, flush=True)
 
     try:
@@ -108,6 +118,7 @@ async def execute(args, limits):
             args.check,
             progress=progress,
             child_provider_factory=child_factory,
+            evaluator=args.evaluator,
         )
     finally:
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -140,4 +151,4 @@ def main():
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2))
-    return 0 if result["status"] == "succeeded" else (130 if result["status"] == "cancelled" else 1)
+    return {"succeeded": 0, "cancelled": 130, "inconclusive": 3}.get(result["status"], 1)
