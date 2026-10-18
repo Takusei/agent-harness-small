@@ -245,7 +245,7 @@ HTTP mock for SDK serialization; neither is described as live AI. See
 
 ## Reference attribution
 
-Design ideas inspected in the read-only sibling `../poc/coding-agent-langchain/`:
+Design ideas inspected in the read-only sibling `../../../learning/coding-agent-langchain/`:
 `executor.py` (container flags and cleanup), `worker.py` (read hashes and exact
 edits), `persistence.py` (observable journals), and `demo.py` (scripted tool calls).
 This project independently implements orchestration and does not import or depend

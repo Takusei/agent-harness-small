@@ -40,7 +40,7 @@ are later possibilities, not requirements for v1.
 
 ## Existing work to reuse thoughtfully
 
-- `../poc/coding-agent-langchain/`: inspect its Docker executor, file guards,
+- `../../../learning/coding-agent-langchain/`: inspect its Docker executor, file guards,
   CLI, checkpoint/journal design, and deterministic demo. Reuse small appropriate
   utilities with attribution where needed; do not copy the whole LangGraph runtime.
 - `../agentic-memory-mcp/`: standalone MCP memory server. Read its `AGENTS.md`,
